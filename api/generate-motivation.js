@@ -64,8 +64,9 @@ const extractOpenAIText = (transport) => {
 };
 
 const resolveGenerationSelection = (payload) => {
-  const taskType = TaskTypeConfig.getTaskType(payload.taskType)
-    || TaskTypeConfig.TASK_TYPES[TaskTypeConfig.DEFAULT_TASK_TYPE];
+  const lang = payload.lang === "en" ? "en" : "ko";
+  const taskType = TaskTypeConfig.getTaskType(payload.taskType, lang)
+    || TaskTypeConfig.localizeTaskType(TaskTypeConfig.TASK_TYPES[TaskTypeConfig.DEFAULT_TASK_TYPE], lang);
   const sdtAnalysis = TaskTypeConfig.analyzeSDTNeeds({ ...payload, taskType: taskType.key });
   const surveySelection = TaskTypeConfig.getStrategySelection(taskType.key);
   const selectedFrames = sdtAnalysis.frames.slice(0, 2);
@@ -243,6 +244,170 @@ const buildMessages = (payload) => {
   ];
 };
 
+const buildMessagesEn = (payload) => {
+  const {
+    taskType,
+    selectedFrames,
+    coreStrategy,
+    supportingStrategy,
+    surveySelection
+  } = resolveGenerationSelection({ ...payload, lang: "en" });
+  return [
+  {
+    role: "system",
+    content: [
+      "You are a UX writer crafting natural English guidance messages for a crowdsourcing worker.",
+
+      // --------------------------------------------------
+      // General writing rules
+      // --------------------------------------------------
+      "Never expose the internal strategy names (Autonomy, Competence, Relatedness, Meaningfulness, Appreciation) to the worker.",
+      "Return only JSON containing 3 pre-task candidates, 3 post-task candidates, and the final pre/post-task messages.",
+      "Each candidate in beforeOptions and afterOptions, and both finalBeforeText and finalAfterText, must be a complete, naturally flowing English passage of 4-5 sentences.",
+      "Never allow 3 sentences or fewer, or 6 sentences or more, and never pad the sentence count by repeating the same idea or splitting a short phrase across periods.",
+      "Write calmly and concretely, with no exaggeration, pressure, guilt, or promotional language.",
+      "Write the way a real requester would naturally address a worker in English; avoid stiff, translated-sounding, or overly formal phrasing.",
+      "Never use double quotes (\") inside the message text of beforeOptions, afterOptions, finalBeforeText, or finalAfterText. Double quotes required by JSON syntax are the only exception.",
+      "Do not add unnecessary emphasis marks such as quotes, parentheses, or bold markers around the task title either.",
+      "Never use double quotes inside the written message content.",
+
+      // --------------------------------------------------
+      // Pre-task strategy
+      // --------------------------------------------------
+      "The pre-task message should center on the Core strategy and Supporting strategy determined by the Task Type.",
+      "Core is the central strategy of the pre-task message; Supporting reinforces it.",
+      "Do not present the two strategies with equal weight — make the Core strategy's meaning clearly more prominent across the message.",
+      "Do not force in fixed phrases or keywords for each strategy; instead let the worker's sense of choice, confidence, or respect emerge naturally from the overall meaning of the sentences.",
+
+      `Core strategy (pre-task lead strategy): ${coreStrategy}`,
+      `Supporting strategy (pre-task supporting strategy): ${supportingStrategy}`,
+      `Survey evidence (N=${TaskTypeConfig.SURVEY_SAMPLE_SIZE}): Core ${coreStrategy} ${surveySelection.corePercentage.toFixed(1)}%, Supporting ${supportingStrategy} ${surveySelection.supportingPercentage.toFixed(1)}%.`,
+      `The confirmed Task Type is ${taskType.label}. This classifies the worker's task experience — it is not an interface type.`,
+      `The figure-based pre-task strategy priority is ${selectedFrames.join(" + ")}.`,
+
+      "The beforeOptions candidates should reflect a variety of Relatedness, Competence, and Autonomy angles, but finalBeforeText must strictly follow the Core + Supporting priority specified above.",
+
+      // --------------------------------------------------
+      // Post-task strategy
+      // --------------------------------------------------
+      "The post-task message must not simply repeat the pre-task's Core/Supporting strategy.",
+      "The central purpose of the post-task message is to help the worker understand where their work contributed, and to acknowledge and thank them for their time, effort, and judgment.",
+      "So for the post-task message, use Meaningfulness as the core strategy and Appreciation/Relatedness as the supporting strategy.",
+      "Never mention whether a reward exists, its amount, or payment/settlement in the post-task message.",
+
+      `Contribution information for the task output: ${clean(payload.socialImpact)}`,
+
+      "The post-task message must be written using the contribution information above.",
+      "Use only the facts stated in the contribution information as evidence, and concretely explain what data, system, research, or output the worker's result feeds into.",
+      "Never speculate about or assert facts, intent, impact, or outcomes beyond what was provided, and never exaggerate.",
+      "Rather than vaguely saying it 'helps' or is 'important,' explain as concretely as possible what the result is used for or what quality it improves.",
+
+      "The post-task message must include all three of the following elements:",
+      "1. A natural acknowledgment that the task is complete",
+      "2. Concrete appreciation and recognition of the time, effort, or careful judgment the worker put in",
+      "3. A concrete, non-exaggerated explanation of Meaningfulness based on the provided contribution information",
+
+      "Do not end the appreciation with a single formal 'thank you' sentence — concretely acknowledge whichever of the worker's time, care, judgment, or contribution best fits this task.",
+      "Write the post-task message in a way that respects and recognizes the worker's contribution, rather than evaluating or praising their performance.",
+      "If accuracy or quality was not actually verified, do not assert unverified outcomes such as 'you performed this accurately' or 'you delivered excellent results.'",
+
+      // --------------------------------------------------
+      // Message length
+      // --------------------------------------------------
+      "Message length evidence: Medium was preferred by 66.7% (80/120), so both final messages use 4-5 sentences.",
+
+      // --------------------------------------------------
+      // Output consistency
+      // --------------------------------------------------
+      "Return selectedFrames as exactly the two strategy values used for the pre-task message, in the same order — do not substitute different frames.",
+
+      // --------------------------------------------------
+      // Self-check
+      // --------------------------------------------------
+      "Before returning the JSON, self-check the pre-task message: is it a complete 4-5 sentences, does it fit the Task Type, is Core clearly the lead with Supporting reinforcing it, is it free of repetition, and are no internal strategy names exposed?",
+
+      "Separately self-check the post-task message: is it a complete 4-5 sentences, does it acknowledge task completion, does it appreciate the time/effort/judgment involved, does it explain meaningfulness grounded in the contribution information, is there no mention of reward, does the final sentence end exactly with 'Have a great day!', and is it free of speculation, exaggeration, or unverified claims?",
+
+      "If any condition is not met, silently revise the sentences internally and return only the corrected JSON.",
+
+      // --------------------------------------------------
+      // Fixed opening / closing
+      // --------------------------------------------------
+      `finalBeforeText must begin with exactly this sentence: Hello! Thank you for taking part in the ${clean(payload.title)} task.`,
+      "finalAfterText must end with exactly this sentence (include it as the final sentence within the overall 4-5 sentences): Have a great day!"
+    ].join("\n")
+  },
+  {
+    role: "user",
+    content: [
+      "[Task information]",
+      `Task title: ${clean(payload.title)}`,
+      `Task Type: ${taskType.label} (${taskType.key})`,
+      `Task Type description: ${taskType.description}`,
+      `Task Type characteristics: ${taskType.characteristics.map(item => item.label).join(" · ")}`,
+      `Task Type mapping rationale: ${taskType.mappingReason}`,
+      `Completion reward: ${clean(payload.reward)}`,
+      `Task instructions: ${clean(payload.description)}`,
+      `Emotional burden: ${clean(payload.riskLevel)}`,
+      `Repetition/focus burden: ${clean(payload.fatigueLevel)}`,
+      `What the worker will do: ${clean(payload.objective)}`,
+      `Social contribution of the task: ${clean(payload.socialImpact)}`,
+      `Situations the worker may encounter: ${clean(payload.workerContext)}`,
+      `Time limit per single task: ${clean(payload.timeLimitMinutes)} minutes`,
+      "",
+      "[Pre-task final message design criteria]",
+      `Core strategy: ${coreStrategy}`,
+      `Supporting strategy: ${supportingStrategy}`,
+      "finalBeforeText should be built around Core, with Supporting reinforcing it.",
+      "",
+      "[Post-task final message design criteria]",
+      "Core strategy: Meaningfulness",
+      "Supporting strategy: Appreciation/Relatedness",
+      "finalAfterText should be built around the concrete meaning of the task's contribution, reinforced by acknowledgment and appreciation of the worker's time, effort, and judgment.",
+      "Explain the contribution meaning concretely per Task Type: Annotation/Classification=accuracy, quality, reliability; Data Collection/Creation=future analysis or content-building material; Search/Verification=information accuracy and reliability; Evaluation/Comparison=evaluation and decision-making; Content Moderation=a safe and trustworthy environment; Surveys/Experiments=research findings and understanding users.",
+      "",
+      "[Response JSON schema]",
+      JSON.stringify({
+        psychologicalFactors: {
+          taskType: taskType.key,
+          taskTypeLabel: taskType.label,
+          taskTypeReason: taskType.mappingReason,
+          taskTypeCharacteristics: taskType.characteristics,
+          inferredTaskTypes: [{ type: taskType.label, evidence: "metadata evidence", confidence: 0.7 }],
+          primaryTaskType: taskType.label,
+          primaryPsychologicalType: taskType.psychologicalType,
+          psychologicalBurdens: ["Burden the worker may feel"],
+          motivationalFactors: ["Factors that can be used to support motivation"],
+          sdtNeeds: selectedFrames.map(frame => frame === "Relatedness" ? "relatedness" : frame.toLowerCase()),
+          selectedFrames,
+          frameSelectionReason: taskType.mappingReason,
+          surveyEvidence: {
+            sampleSize: TaskTypeConfig.SURVEY_SAMPLE_SIZE,
+            corePercentage: surveySelection.corePercentage,
+            supportingPercentage: surveySelection.supportingPercentage,
+            messageLength: TaskTypeConfig.MESSAGE_LENGTH_EVIDENCE
+          },
+          constraintsApplied: ["no pressure", "no exaggeration", "keep concrete criteria"]
+        },
+        beforeOptions: [
+          { label: "Connection & Contribution", frame: "Relatedness", message: "A complete, naturally flowing 4-5 sentence pre-task candidate message" },
+          { label: "Confidence in Judgment", frame: "Competence", message: "A complete, naturally flowing 4-5 sentence pre-task candidate message" },
+          { label: "Autonomy & Choice", frame: "Autonomy", message: "A complete, naturally flowing 4-5 sentence pre-task candidate message" }
+        ],
+        afterOptions: [
+          { label: "Meaning of Contribution", frame: "Meaningfulness", message: "A complete, naturally flowing 4-5 sentence post-task candidate message centered on the concrete use and meaning of the contribution" },
+          { label: "Time & Effort Recognition", frame: "Appreciation", message: "A complete, naturally flowing 4-5 sentence post-task candidate message concretely acknowledging the worker's time and effort" },
+          { label: "Judgment & Contribution Recognition", frame: "Relatedness", message: "A complete, naturally flowing 4-5 sentence post-task candidate message concretely acknowledging the worker's judgment and contribution" }
+        ],
+        finalBeforeText: "The final complete 4-5 sentence pre-task message that preserves the Core > Supporting weighting",
+        finalAfterText: "The final complete 4-5 sentence post-task message that weighs Meaningfulness > Appreciation/Relatedness, includes the Task-Type-specific contribution meaning and acknowledgment of time/effort/judgment, and ends with exactly 'Have a great day!'",
+        structuredPromptSummary: "Prompt structure summary"
+      }, null, 2)
+    ].join("\n")
+  }
+  ];
+};
+
 const parseModelJson = (content) => {
   const trimmed = String(content || "").trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -262,20 +427,31 @@ const normalizeMessageText = (message) => String(message || "")
   .replace(/\s+/g, " ")
   .trim();
 
-const ensureBeforeOpening = (message, title) => {
+const ensureBeforeOpening = (message, title, lang) => {
+  if (lang === "en") {
+    const opening = `Hello! Thank you for taking part in the ${clean(title)} task.`;
+    const body = normalizeMessageText(message).replace(/^hello[,!.]\s*thank you for (?:taking part in|participating in)\s*.+?\s*task[.!]?\s*/i, "");
+    return normalizeMessageText(`${opening} ${body}`);
+  }
   const opening = `안녕하세요. ${clean(title)}에 참여해 주셔서 감사합니다.`;
   const body = normalizeMessageText(message).replace(/^안녕하세요[,.]\s*.+?에\s*참여해\s*주셔서\s*감사합니다[.!]?\s*/i, "");
   return normalizeMessageText(`${opening} ${body}`);
 };
 
-const CLOSING_LINE = "좋은 하루 되시길 바랍니다!";
+const CLOSING_LINE_KO = "좋은 하루 되시길 바랍니다!";
+const CLOSING_LINE_EN = "Have a great day!";
 
-const ensureAfterClosing = (message) => {
+const ensureAfterClosing = (message, lang) => {
+  if (lang === "en") {
+    const body = normalizeMessageText(message).replace(/\s*have\s*(?:a|an)?\s*(?:great|good|nice|wonderful)\s*day[^.!?]*[.!?]?\s*$/i, "");
+    return normalizeMessageText(`${body} ${CLOSING_LINE_EN}`);
+  }
   const body = normalizeMessageText(message).replace(/\s*좋은\s*하루[^.!?]*[.!?]?\s*$/i, "");
-  return normalizeMessageText(`${body} ${CLOSING_LINE}`);
+  return normalizeMessageText(`${body} ${CLOSING_LINE_KO}`);
 };
 
 const normalizeGeneratedMessageContent = (parsed, payload) => {
+  const lang = payload.lang === "en" ? "en" : "ko";
   for (const optionKey of ["beforeOptions", "afterOptions"]) {
     if (!Array.isArray(parsed[optionKey])) continue;
     parsed[optionKey] = parsed[optionKey].map(option => ({
@@ -283,8 +459,8 @@ const normalizeGeneratedMessageContent = (parsed, payload) => {
       message: normalizeMessageText(option?.message)
     }));
   }
-  if (parsed.finalBeforeText) parsed.finalBeforeText = ensureBeforeOpening(parsed.finalBeforeText, payload.title);
-  if (parsed.finalAfterText) parsed.finalAfterText = ensureAfterClosing(parsed.finalAfterText);
+  if (parsed.finalBeforeText) parsed.finalBeforeText = ensureBeforeOpening(parsed.finalBeforeText, payload.title, lang);
+  if (parsed.finalAfterText) parsed.finalAfterText = ensureAfterClosing(parsed.finalAfterText, lang);
   return parsed;
 };
 
@@ -323,6 +499,7 @@ module.exports = async (req, res) => {
 
   try {
     const payload = req.body || {};
+    const buildPromptMessages = payload.lang === "en" ? buildMessagesEn : buildMessages;
     if (provider === "openai") {
       const apiUrl = normalizeOpenAIApiUrl(process.env.OPENAI_API_URL);
       const model = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
@@ -335,7 +512,7 @@ module.exports = async (req, res) => {
         },
         body: JSON.stringify({
           model,
-          input: buildMessages(payload),
+          input: buildPromptMessages(payload),
           max_output_tokens: 5000,
           reasoning: { effort: reasoningEffort }
         })
@@ -371,7 +548,7 @@ module.exports = async (req, res) => {
       },
       body: JSON.stringify({
         model,
-        messages: buildMessages(payload),
+        messages: buildPromptMessages(payload),
         temperature: 0.35,
         max_tokens: 3200,
         stream: false
